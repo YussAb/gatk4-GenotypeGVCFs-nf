@@ -1,5 +1,12 @@
 #!/usr/bin/env nextflow
 
+//ref
+//genomicdbimport
+//https://gatk.broadinstitute.org/hc/en-us/articles/360036883491-GenomicsDBImport
+//joint calling
+//https://gatk.broadinstitute.org/hc/en-us/articles/360035890431-The-logic-of-joint-calling-for-germline-short-variants
+//variant filtering
+//https://gatk.broadinstitute.org/hc/en-us/articles/360035531112--How-to-Filter-variants-either-with-VQSR-or-by-hard-filtering
 // Copyright (C) 2018 IARC/WHO
 
 // This program is free software: you can redistribute it and/or modify
@@ -53,18 +60,19 @@ if (params.help)
 
 //
 // Parameters Init
+//params.interval = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list"
 //
 params.input         = null
-params.output_dir    = "."
-params.cohort        = "cohort"
-params.ref_fasta     = null
-params.gatk_exec     = null
-params.dbsnp         = null
-params.mills         = null
-params.axiom         = null
-params.hapmap        = null
-params.omni          = null
-params.onekg         = null
+params.output_dir    = "results"
+params.cohort        = "cohort" 
+params.ref_fasta     = "/hpcshare/genomics/references/gatk_bundle/reference/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta"
+params.gatk_exec     = "gatk"
+params.dbsnp         = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_Homo_sapiens_assembly38.dbsnp138.vcf"
+params.mills         = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
+params.axiom         = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_Axiom_Exome_Plus.genotypes.all_populations.poly.hg38.vcf.gz"
+params.hapmap        = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_hapmap_3.3.hg38.vcf.gz"
+params.omni          = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_1000G_omni2.5.hg38.vcf.gz"
+params.onekg         = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_1000G_phase1.snps.high_confidence.hg38.vcf.gz"
 
 //
 // Parse Input Parameters
@@ -74,7 +82,7 @@ gvcf_ch = Channel
 
 gvcf_idx_ch = Channel
 			.fromPath(params.input)
-			.map { file -> file+".idx" }
+			.map { file -> file+".tbi" }
 
 			
 GATK                              = params.gatk_exec
@@ -100,7 +108,7 @@ chromosomes_ch = Channel
 //
 process GenomicsDBImport {
 
-	cpus 1 
+   cpus 1 
 
     time { (10.hour + (2.hour * task.attempt)) } // First attempt 12h, second 14h, etc
     memory { (64.GB + (8.GB * task.attempt)) } // First attempt 72GB, second 80GB, etc
@@ -111,9 +119,9 @@ process GenomicsDBImport {
 	tag { chr }
 
     input:
-	each chr from chromosomes_ch
+  	each chr from chromosomes_ch
     file (gvcf) from gvcf_ch.collect()
-	file (gvcf_idx) from gvcf_idx_ch.collect()
+	 file (gvcf_idx) from gvcf_idx_ch.collect()
 
 	output:
     set chr, file ("${params.cohort}.${chr}") into gendb_ch
@@ -122,14 +130,13 @@ process GenomicsDBImport {
 	"""
 	${GATK} GenomicsDBImport --java-options "-Xmx24g -Xms24g -Djava.io.tmpdir=/tmp" \
 	${gvcf.collect { "-V $it " }.join()} \
-    -L ${chr} \
-    --batch-size 50 \
-    --tmp-dir=/tmp \
-	--genomicsdb-workspace-path ${params.cohort}.${chr}
-	
+        -L ${chr} \
+        --batch-size 50 \
+        --tmp-dir=/tmp \
+      	--genomicsdb-workspace-path ${params.cohort}.${chr} \
+        -R ${params.ref_fasta}
 	"""
 }	
-
 
 //
 // Process launching GenotypeGVCFs on the previously created genDB, per chromosome
@@ -157,7 +164,7 @@ process GenotypeGVCFs {
 	"""
     samtools faidx ${genome}
 
-    java -jar \$PICARD_TOOLS_LIBDIR/picard.jar \
+    java -jar /apps/picard/2.17.11/picard-2.17.11.jar \
     CreateSequenceDictionary \
     R=${genome} \
     O=${genome.baseName}.dict
@@ -282,12 +289,12 @@ process SID_VariantRecalibrator {
       --output ${params.cohort}.sid.recal \
       --tranches-file ${params.cohort}.sid.tranches \
       --trust-all-polymorphic \
-      -an QD -an DP -an FS -an SOR -an ReadPosRankSum -an MQRankSum -an InbreedingCoeff \
+      -an QD -an DP -an FS -an SOR -an ReadPosRankSum -an MQRankSum \
       -mode INDEL \
       --max-gaussians 4 \
-      -resource mills,known=false,training=true,truth=true,prior=12:${mills_resource_vcf} \
-      -resource axiomPoly,known=false,training=true,truth=false,prior=10:${axiomPoly_resource_vcf} \
-      -resource dbsnp,known=true,training=false,truth=false,prior=2:${dbsnp_resource_vcf}
+      --resource:mills,known=false,training=true,truth=true,prior=12 ${mills_resource_vcf} \
+      --resource:axiomPoly,known=false,training=true,truth=false,prior=10 ${axiomPoly_resource_vcf} \
+      --resource:dbsnp,known=true,training=false,truth=false,prior=2 ${dbsnp_resource_vcf}
 	
 	"""
 }	
@@ -323,13 +330,13 @@ process SNV_VariantRecalibrator {
       --output ${params.cohort}.snv.recal \
       --tranches-file ${params.cohort}.snv.tranches \
       --trust-all-polymorphic \
-      -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR -an DP -an InbreedingCoeff \
+      -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR -an DP \
       -mode SNP \
       --max-gaussians 6 \
-      -resource hapmap,known=false,training=true,truth=true,prior=15:${hapmap_resource_vcf} \
-      -resource omni,known=false,training=true,truth=true,prior=12:${omni_resource_vcf} \
-      -resource 1000G,known=false,training=true,truth=false,prior=10:${one_thousand_genomes_resource_vcf} \
-      -resource dbsnp,known=true,training=false,truth=false,prior=7:${dbsnp_resource_vcf}
+      --resource:hapmap,known=false,training=true,truth=true,prior=15 ${hapmap_resource_vcf} \
+      --resource:omni,known=false,training=true,truth=true,prior=12 ${omni_resource_vcf} \
+      --resource:1000G,known=false,training=true,truth=false,prior=10 ${one_thousand_genomes_resource_vcf} \
+      --resource:dbsnp,known=true,training=false,truth=false,prior=7 ${dbsnp_resource_vcf}
 	
 	"""
 }	
@@ -341,9 +348,9 @@ process SNV_VariantRecalibrator {
 //
 process ApplyRecalibration {
 
-	cpus 1 
-	memory '7 GB'
-	time '12h'
+  	cpus 1 
+  	memory '7 GB'
+  	time '12h'
 	
 	tag "${params.cohort}"
 
@@ -383,9 +390,4 @@ process ApplyRecalibration {
 		
 	"""
 }	
-
-
-
-
-
 
