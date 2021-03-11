@@ -63,7 +63,7 @@ if (params.help)
 //params.interval = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list"
 //
 params.input         = null
-params.output_dir    = "results"
+params.outdir        = "results"
 params.cohort        = "cohort" 
 params.ref_fasta     = "/hpcshare/genomics/references/gatk_bundle/reference/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta"
 params.gatk_exec     = "gatk"
@@ -115,7 +115,9 @@ process GenomicsDBImport {
 
     errorStrategy 'retry'
     maxRetries 3
-
+    
+    publishDir "${params.outdir}/genomicdb", mode:'copy'
+    
 	tag { chr }
 
     input:
@@ -149,8 +151,9 @@ process GenotypeGVCFs {
 	
 	tag { chr }
 
-	publishDir params.output_dir, mode: 'copy', pattern: '*.{vcf,idx}'
-
+	//publishDir params.output_dir, mode: 'copy', pattern: '*.{vcf,idx}'
+  publishDir "${params.outdir}/raw_vcf", mode:'copy'
+  
     input:
 	set chr, file (workspace) from gendb_ch
    	file genome from ref
@@ -323,7 +326,7 @@ process SNV_VariantRecalibrator {
 
     script:
 	"""
-    ${GATK} --java-options "-Xmx90g -Xms90g" \
+    ${GATK} --java-options "-Xmx24g -Xms24g" \
       VariantRecalibrator \
       -R ${genome} \
       -V ${vcf} \
@@ -354,8 +357,9 @@ process ApplyRecalibration {
 	
 	tag "${params.cohort}"
 
-	publishDir params.output_dir, mode: 'copy'
-
+	//publishDir params.output_dir, mode: 'copy'
+  publishDir "${params.outdir}/recal_vcf", mode:'copy' 
+ 
     input:
 	set file (input_vcf), file (input_vcf_idx) from vcf_recal_ch
 	set file (indels_recalibration), file (indels_recalibration_idx), file (indels_tranches) from sid_recal_ch
