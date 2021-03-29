@@ -7,20 +7,7 @@
 //https://gatk.broadinstitute.org/hc/en-us/articles/360035890431-The-logic-of-joint-calling-for-germline-short-variants
 //variant filtering
 //https://gatk.broadinstitute.org/hc/en-us/articles/360035531112--How-to-Filter-variants-either-with-VQSR-or-by-hard-filtering
-// Copyright (C) 2018 IARC/WHO
 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 params.help = null
 
@@ -28,7 +15,7 @@ log.info ""
 log.info "-------------------------------------------------------------------------"
 log.info "  gatk4-GenotypeGVCFs v1: Exact Joint Genotyping GATK4 Best Practices         "
 log.info "-------------------------------------------------------------------------"
-log.info "Copyright (C) IARC/WHO"
+log.info "yussline_vda"
 log.info "This program comes with ABSOLUTELY NO WARRANTY; for details see LICENSE"
 log.info "This is free software, and you are welcome to redistribute it"
 log.info "under certain conditions; see LICENSE for details."
@@ -60,11 +47,13 @@ if (params.help)
 
 //
 // Parameters Init
-//params.interval = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list"
+params.interval = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list"
+//
+params.sample = ""
 //
 params.input         = null
 params.outdir        = "results"
-params.cohort        = "cohort" 
+params.cohort        = "cohort_db" 
 params.ref_fasta     = "/hpcshare/genomics/references/gatk_bundle/reference/resources_broad_hg38_v0_Homo_sapiens_assembly38.fasta"
 params.gatk_exec     = "gatk"
 params.dbsnp         = "/hpcshare/genomics/references/gatk_bundle/resources/resources_broad_hg38_v0_Homo_sapiens_assembly38.dbsnp138.vcf"
@@ -94,50 +83,29 @@ hapmap_resource_vcf               = file(params.hapmap)
 omni_resource_vcf                 = file(params.omni)
 one_thousand_genomes_resource_vcf = file(params.onekg)
 
-// ExcessHet is a phred-scaled p-value. We want a cutoff of anything more extreme
-// than a z-score of -4.5 which is a p-value of 3.4e-06, which phred-scaled is 54.69
-excess_het_threshold = 54.69
-
-// Store the chromosomes in a channel for easier workload scattering on large cohort
-chromosomes_ch = Channel
-    .from( "chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr20", "chr21", "chr22", "chrX", "chrY" )
 
 
-//
-// Process launching GenomicsDBImport to gather all VCFs, per chromosome
 //
 process GenomicsDBImport {
 
-   cpus 1 
-
-    time { (10.hour + (2.hour * task.attempt)) } // First attempt 12h, second 14h, etc
-    memory { (64.GB + (8.GB * task.attempt)) } // First attempt 72GB, second 80GB, etc
-
-    errorStrategy 'retry'
-    maxRetries 3
     
     publishDir "${params.outdir}/genomicdb", mode:'copy'
-    
-	tag { chr }
 
     input:
-  	each chr from chromosomes_ch
     file (gvcf) from gvcf_ch.collect()
-	 file (gvcf_idx) from gvcf_idx_ch.collect()
+    file (gvcf_idx) from gvcf_idx_ch.collect()
 
-	output:
-    set chr, file ("${params.cohort}.${chr}") into gendb_ch
+	  output:
+    file ("${params.cohort}") into gendb_ch
 	
     script:
-	"""
-	${GATK} GenomicsDBImport --java-options "-Xmx24g -Xms24g -Djava.io.tmpdir=/tmp" \
-	${gvcf.collect { "-V $it " }.join()} \
-        -L ${chr} \
-        --batch-size 50 \
-        --tmp-dir=/tmp \
-      	--genomicsdb-workspace-path ${params.cohort}.${chr} \
-        -R ${params.ref_fasta}
-	"""
+  	"""
+  	${GATK} GenomicsDBImport --java-options "-Xmx24g -Xms24g -Djava.io.tmpdir=/tmp" \
+  	${gvcf.collect { "-V $it " }.join()} \
+          -L $params.interval  \
+        	--genomicsdb-workspace-path ${params.cohort} \
+          -R ${params.ref_fasta}
+  	"""
 }	
 
 //
@@ -145,26 +113,19 @@ process GenomicsDBImport {
 //
 process GenotypeGVCFs {
 
-	cpus 4 
-	memory '48 GB'
-	time '20h'
-	
-	tag { chr }
-
-	//publishDir params.output_dir, mode: 'copy', pattern: '*.{vcf,idx}'
-  publishDir "${params.outdir}/raw_vcf", mode:'copy'
+    publishDir "${params.outdir}/genotype_gvcf", mode:'copy' , pattern: '*.{vcf,idx}'
   
     input:
-	set chr, file (workspace) from gendb_ch
+	  file (workspace) from gendb_ch
    	file genome from ref
 
 	output:
-    set chr, file("${params.cohort}.${chr}.vcf"), file("${params.cohort}.${chr}.vcf.idx") into vcf_ch
+    set file("${params.sample}.vcf"), file("${params.sample}.vcf.idx") into (vcf_ch,vcf_snv_ch, vcf_sid_ch, vcf_recal_ch)
     file "${genome}.fai" into faidx_sid_ch,faidx_snv_ch
-	file "${genome.baseName}.dict" into dict_sid_ch,dict_snv_ch
+	  file "${genome.baseName}.dict" into dict_sid_ch,dict_snv_ch
 
     script:
-	"""
+  	"""
     samtools faidx ${genome}
 
     java -jar /apps/picard/2.17.11/picard-2.17.11.jar \
@@ -177,18 +138,148 @@ process GenotypeGVCFs {
     ${GATK} --java-options "-Xmx5g -Xms5g" \
      GenotypeGVCFs \
      -R ${genome} \
-     -O ${params.cohort}.${chr}.vcf \
+     -O ${params.sample}.vcf \
      -D ${dbsnp_resource_vcf} \
      -G StandardAnnotation \
      --only-output-calls-starting-in-intervals \
      --use-new-qual-calculator \
      -V gendb://\$WORKSPACE \
-     -L ${chr}
+     -L $params.interval
 
 	"""
 }	
 
 
+//
+// Process SID recalibration
+//
+process SID_VariantRecalibrator {
+
+    input:
+	set file (vcf), file (vcfidx) from vcf_sid_ch
+    file genome from ref
+    file faidx from faidx_sid_ch
+    file dict from dict_sid_ch
+
+	output:
+    set file("${params.sample}.sid.recal"),file("${params.sample}.sid.recal.idx"),file("${params.sample}.sid.tranches") into sid_recal_ch
+
+    script:
+	"""
+    ${GATK} --java-options "-Xmx24g -Xms24g" \
+      VariantRecalibrator \
+      -R ${genome} \
+      -V ${vcf} \
+      --output ${params.sample}.sid.recal \
+      --tranches-file ${params.sample}.sid.tranches \
+      --trust-all-polymorphic \
+      -an QD -an DP -an FS -an SOR -an ReadPosRankSum -an MQRankSum \
+      -mode INDEL \
+      --max-gaussians 4 \
+      --resource:mills,known=false,training=true,truth=true,prior=12 ${mills_resource_vcf} \
+      --resource:axiomPoly,known=false,training=true,truth=false,prior=10 ${axiomPoly_resource_vcf} \
+      --resource:dbsnp,known=true,training=false,truth=false,prior=2 ${dbsnp_resource_vcf}
+	
+	"""
+}	
+
+
+
+//
+// Process SNV recalibration
+//
+process SNV_VariantRecalibrator {
+
+    input:
+	set file (vcf), file (vcfidx) from vcf_snv_ch
+    file genome from ref
+    file faidx from faidx_snv_ch
+    file dict from dict_snv_ch
+
+	output:
+    set file("${params.sample}.snv.recal"),file("${params.sample}.snv.recal.idx"),file("${params.sample}.snv.tranches") into snv_recal_ch
+
+    script:
+	"""
+    ${GATK} --java-options "-Xmx24g -Xms24g" \
+      VariantRecalibrator \
+      -R ${genome} \
+      -V ${vcf} \
+      --output ${params.sample}.snv.recal \
+      --tranches-file ${params.sample}.snv.tranches \
+      --trust-all-polymorphic \
+      -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR -an DP \
+      -mode SNP \
+      --max-gaussians 6 \
+      --resource:hapmap,known=false,training=true,truth=true,prior=15 ${hapmap_resource_vcf} \
+      --resource:omni,known=false,training=true,truth=true,prior=12 ${omni_resource_vcf} \
+      --resource:1000G,known=false,training=true,truth=false,prior=10 ${one_thousand_genomes_resource_vcf} \
+      --resource:dbsnp,known=true,training=false,truth=false,prior=7 ${dbsnp_resource_vcf}
+	
+	"""
+}	
+
+
+
+//
+// Process Apply SNV and SID recalibrations
+//
+process ApplyRecalibration {
+
+  	cpus 1 
+  	memory '7 GB'
+  	time '12h'
+	
+	tag "${params.cohort}"
+
+	//publishDir params.output_dir, mode: 'copy'
+  publishDir "${params.outdir}/vqsr", mode:'copy' 
+ 
+    input:
+	set file (input_vcf), file (input_vcf_idx) from vcf_recal_ch
+	set file (indels_recalibration), file (indels_recalibration_idx), file (indels_tranches) from sid_recal_ch
+	set file (snps_recalibration), file (snps_recalibration_idx), file (snps_tranches) from snv_recal_ch
+
+	output:
+    set file("${params.sample}.recalibrated.vcf"),file("${params.sample}.recalibrated.vcf.idx") into vcf_final_ch
+
+    script:
+	"""
+    ${GATK} --java-options "-Xmx5g -Xms5g" \
+      ApplyVQSR \
+      -O tmp.indel.recalibrated.vcf \
+      -V ${input_vcf} \
+      --recal-file ${indels_recalibration} \
+      --tranches-file ${indels_tranches} \
+      --truth-sensitivity-filter-level 99.0 \
+      --exclude-filtered \
+      --create-output-variant-index true \
+      -mode INDEL
+
+    ${GATK} --java-options "-Xmx5g -Xms5g" \
+      ApplyVQSR \
+      -O ${params.sample}.recalibrated.vcf \
+      -V tmp.indel.recalibrated.vcf \
+      --recal-file ${snps_recalibration} \
+      --tranches-file ${snps_tranches} \
+      --truth-sensitivity-filter-level 99.5 \
+      --exclude-filtered \
+      --create-output-variant-index true \
+      -mode SNP
+		
+	"""
+}	
+
+
+
+/*
+////JUNK_CODE
+
+// ExcessHet is a phred-scaled p-value. We want a cutoff of anything more extreme
+// than a z-score of -4.5 which is a p-value of 3.4e-06, which phred-scaled is 54.69
+excess_het_threshold = 54.69
+
+/*
 //
 // Process Hard Filtering on ExcessHet, per chromosome
 //
@@ -226,21 +317,14 @@ process HardFilter {
 }	
 
 
-
 process GatherVcfs {
 
-	cpus 1
-	memory '48 GB'
-	time '12h'
-	
-	tag "${params.cohort}"
 
     input:
-    file (vcf) from vcf_hf_ch.collect()
-	file (vcf_idx) from vcf_idx_hf_ch.collect()
-
-	output:
-    set file("${params.cohort}.vcf"), file("${params.cohort}.vcf.idx") into (vcf_snv_ch, vcf_sid_ch, vcf_recal_ch)
+   	set file (vcf), file (vcfidx) from vcf_ch.collect()
+    
+	  output:
+    set file("${params.sample}.vcf"), file("${params.sample}.vcf.idx") into (vcf_snv_ch, vcf_sid_ch, vcf_recal_ch)
 
     // WARNING : complicated channel extraction! 
     // GATK GatherVcfs only accepts as input VCF in the chromosomical order. Nextflow/Groovy list are not sorted. The following command does :
@@ -253,145 +337,10 @@ process GatherVcfs {
 
     script:
 	"""
-	${GATK} --java-options "-Xmx3g -Xms3g" \
-      GatherVcfs \
+	${GATK} --java-options "-Xmx3g -Xms3g" GatherVcfs \
       ${vcf.findAll{ it=~/chr\d+/ }.collect().sort{ it.name.tokenize('.')[1].substring(3).toInteger() }.plus(vcf.find{ it=~/chrX/ }).plus(vcf.find{ it=~/chrY/ }).collect{ "--INPUT $it " }.join() } \
-      --OUTPUT ${params.cohort}.vcf
-
+      --OUTPUT ${params.sample}.vcf
 	"""
 }	
 
-
-
-//
-// Process SID recalibration
-//
-process SID_VariantRecalibrator {
-
-	cpus 1
-	memory '24 GB'
-	time '12h'
-	
-	tag "${params.cohort}"
-
-    input:
-	set file (vcf), file (vcfidx) from vcf_sid_ch
-    file genome from ref
-    file faidx from faidx_sid_ch
-    file dict from dict_sid_ch
-
-	output:
-    set file("${params.cohort}.sid.recal"),file("${params.cohort}.sid.recal.idx"),file("${params.cohort}.sid.tranches") into sid_recal_ch
-
-    script:
-	"""
-    ${GATK} --java-options "-Xmx24g -Xms24g" \
-      VariantRecalibrator \
-      -R ${genome} \
-      -V ${vcf} \
-      --output ${params.cohort}.sid.recal \
-      --tranches-file ${params.cohort}.sid.tranches \
-      --trust-all-polymorphic \
-      -an QD -an DP -an FS -an SOR -an ReadPosRankSum -an MQRankSum \
-      -mode INDEL \
-      --max-gaussians 4 \
-      --resource:mills,known=false,training=true,truth=true,prior=12 ${mills_resource_vcf} \
-      --resource:axiomPoly,known=false,training=true,truth=false,prior=10 ${axiomPoly_resource_vcf} \
-      --resource:dbsnp,known=true,training=false,truth=false,prior=2 ${dbsnp_resource_vcf}
-	
-	"""
-}	
-
-
-
-//
-// Process SNV recalibration
-//
-process SNV_VariantRecalibrator {
-
-	cpus 1
-	memory '90 GB'
-	time '12h'
-	
-	tag "${params.cohort}"
-
-    input:
-	set file (vcf), file (vcfidx) from vcf_snv_ch
-    file genome from ref
-    file faidx from faidx_snv_ch
-    file dict from dict_snv_ch
-
-	output:
-    set file("${params.cohort}.snv.recal"),file("${params.cohort}.snv.recal.idx"),file("${params.cohort}.snv.tranches") into snv_recal_ch
-
-    script:
-	"""
-    ${GATK} --java-options "-Xmx24g -Xms24g" \
-      VariantRecalibrator \
-      -R ${genome} \
-      -V ${vcf} \
-      --output ${params.cohort}.snv.recal \
-      --tranches-file ${params.cohort}.snv.tranches \
-      --trust-all-polymorphic \
-      -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR -an DP \
-      -mode SNP \
-      --max-gaussians 6 \
-      --resource:hapmap,known=false,training=true,truth=true,prior=15 ${hapmap_resource_vcf} \
-      --resource:omni,known=false,training=true,truth=true,prior=12 ${omni_resource_vcf} \
-      --resource:1000G,known=false,training=true,truth=false,prior=10 ${one_thousand_genomes_resource_vcf} \
-      --resource:dbsnp,known=true,training=false,truth=false,prior=7 ${dbsnp_resource_vcf}
-	
-	"""
-}	
-
-
-
-//
-// Process Apply SNV and SID recalibrations
-//
-process ApplyRecalibration {
-
-  	cpus 1 
-  	memory '7 GB'
-  	time '12h'
-	
-	tag "${params.cohort}"
-
-	//publishDir params.output_dir, mode: 'copy'
-  publishDir "${params.outdir}/recal_vcf", mode:'copy' 
- 
-    input:
-	set file (input_vcf), file (input_vcf_idx) from vcf_recal_ch
-	set file (indels_recalibration), file (indels_recalibration_idx), file (indels_tranches) from sid_recal_ch
-	set file (snps_recalibration), file (snps_recalibration_idx), file (snps_tranches) from snv_recal_ch
-
-	output:
-    set file("${params.cohort}.recalibrated.vcf"),file("${params.cohort}.recalibrated.vcf.idx") into vcf_final_ch
-
-    script:
-	"""
-    ${GATK} --java-options "-Xmx5g -Xms5g" \
-      ApplyVQSR \
-      -O tmp.indel.recalibrated.vcf \
-      -V ${input_vcf} \
-      --recal-file ${indels_recalibration} \
-      --tranches-file ${indels_tranches} \
-      --truth-sensitivity-filter-level 99.0 \
-      --exclude-filtered \
-      --create-output-variant-index true \
-      -mode INDEL
-
-    ${GATK} --java-options "-Xmx5g -Xms5g" \
-      ApplyVQSR \
-      -O ${params.cohort}.recalibrated.vcf \
-      -V tmp.indel.recalibrated.vcf \
-      --recal-file ${snps_recalibration} \
-      --tranches-file ${snps_tranches} \
-      --truth-sensitivity-filter-level 99.5 \
-      --exclude-filtered \
-      --create-output-variant-index true \
-      -mode SNP
-		
-	"""
-}	
-
+*/
