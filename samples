@@ -1,2 +1,1 @@
-/hpcshare/genomics/yabili_pipeline_vda/yabili_germline_vda/NIST7035 _TAAGGCGA/results/VariantCalling/NIST7035 _TAAGGCGA/HaplotypeCallerGVCF/*.g.vcf.gz
-/hpcshare/genomics/yabili_pipeline_vda/yabili_germline_vda/NIST7086_CGTACTAG/results/VariantCalling/NIST7086_CGTACTAG/HaplotypeCallerGVCF/*.g.vcf.gz
+/hpcshare/genomics/sra_cancer/sarek_vda/results/VariantCalling/{HKNPC-049N,HKNPC-050N,HKNPC-056N,HKNPC-075N,HKNPC-090N}/HaplotypeCallerGVCF/HaplotypeCaller_{HKNPC-049N,HKNPC-050N,HKNPC-056N,HKNPC-075N,HKNPC-090N}.g.vcf.gz
